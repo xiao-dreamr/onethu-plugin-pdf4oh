@@ -1,0 +1,44 @@
+{
+  "id": "onethu.pdf4oh",
+  "name": "pdf4oh · 课程 PDF 阅读",
+  "version": "0.1.0",
+  "kind": "js",
+  "entry": "plugin.js",
+  "author": "xiao-dreamr",
+  "repo": "https://github.com/xiao-dreamr/onethu-plugin-pdf4oh",
+  "announce": true,
+  "description": "让 OH 读取网络学堂课程文件里的 PDF 正文：按课程/文件名定位课件，抽取带页码的文本，支持页码范围与页内检索。只读，不写任何课程数据；加密 PDF 与扫描件只做识别与提示。",
+  "permissions": [
+    "learn:read",
+    "net:external",
+    "ui",
+    "storage",
+    "css"
+  ],
+  "settings": [
+    {
+      "key": "maxChars",
+      "label": "单次最多返回字数（默认 9000，越大越完整也越吃上下文）",
+      "type": "text",
+      "default": "9000"
+    },
+    {
+      "key": "maxFileMB",
+      "label": "单个 PDF 大小上限（MB，默认 40）",
+      "type": "text",
+      "default": "40"
+    },
+    {
+      "key": "cacheMB",
+      "label": "解析缓存预算（MB，默认 24；同一份 PDF 多次读取不必重下）",
+      "type": "text",
+      "default": "24"
+    },
+    {
+      "key": "probePages",
+      "label": "扫描件探测页数（默认 6；info 命令只探测前 N 页）",
+      "type": "text",
+      "default": "6"
+    }
+  ]
+}

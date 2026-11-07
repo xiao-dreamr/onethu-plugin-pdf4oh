@@ -1,0 +1,22 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Build guard（plugin.js 必须与 src 同步）
+        run: node build.mjs --check
+      - name: Unit / integration tests（真实课程语料缺失时自动 skip）
+        run: node --test $(find test -name '*.test.mjs' | sort)

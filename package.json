@@ -1,0 +1,12 @@
+{
+  "name": "onethu-plugin-pdf4oh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OneTHU 插件：让 OH 读取网络学堂课程文件里的 PDF 正文（单文件构建产物 plugin.js）",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check",
+    "test": "node --test \"test/**/*.test.mjs\""
+  }
+}

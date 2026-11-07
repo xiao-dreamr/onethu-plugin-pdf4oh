@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="pdf4oh">
+  <rect width="64" height="64" rx="14" fill="#ffffff"/>
+  <rect x="6.5" y="6.5" width="51" height="51" rx="11" fill="none" stroke="#111111" stroke-width="2"/>
+  <path d="M18 21h11.5a7 7 0 0 1 0 14H22v8h-4V21zm4 3.4v7.2h7.2a3.6 3.6 0 0 0 0-7.2H22z" fill="#111111"/>
+  <text x="40" y="43" font-family="Georgia, 'Times New Roman', serif" font-size="19" font-weight="700" fill="#111111">4</text>
+  <text x="17" y="55" font-family="'Helvetica Neue', Arial, sans-serif" font-size="9" font-weight="700" letter-spacing="1.6" fill="#111111">OH</text>
+  <circle cx="47" cy="50" r="3.2" fill="#111111"/>
+</svg>

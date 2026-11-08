@@ -10,6 +10,7 @@
  */
 
 import { loadPdf } from "./pdf/document.js";
+import { prepareFontMatching } from "./pdf/fontmatch.js";
 import { extractRangeText, probeDocument, searchDocument } from "./pdf/text.js";
 import { pdfError } from "./pdf/util.js";
 import {
@@ -91,6 +92,13 @@ async function openDocument(deps, file) {
     maxBytes: deps.cfg.maxFileMB * 1024 * 1024,
   });
   const doc = loadPdf(bytes, { maxBytes: deps.cfg.maxFileMB * 1024 * 1024 });
+  /* 中文 PDF 可能没有 ToUnicode：先准备"系统字体轮廓匹配"（宿主允许时），
+     再进抽取；失败不抛错，字体层按 U+FFFD 降级并给 warning。 */
+  try {
+    await prepareFontMatching(doc, deps.ctx);
+  } catch {
+    /* 匹配是增强项，坏了不能挡住打开文档 */
+  }
   const entry = {
     key,
     name: file.title,

@@ -18,7 +18,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PLUGIN_JS = join(ROOT, "plugin.js");
 const MANIFEST_JSON = join(ROOT, "manifest.json");
 
-const ALLOWED_PERMISSIONS = new Set(["learn:read", "net:external", "ui", "storage", "css"]);
+const ALLOWED_PERMISSIONS = new Set(["learn:read", "net:external", "ui", "storage", "css", "font:read"]);
 
 function fakeCtx(commands, tabs, css) {
   const ctx = {

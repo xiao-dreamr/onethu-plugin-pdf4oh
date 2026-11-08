@@ -25,7 +25,7 @@
 ## 1. 目录与归属（写作用域）
 
 ```
-
+plugins/pdf4oh/
 ├── CONTRACT.md          # lead（本文件，别人只读）
 ├── build.mjs            # lead
 ├── manifest.json        # plugin-shell
@@ -55,7 +55,7 @@
 └── test/                # verifier（各模块作者也可加自己的 *.test.mjs）
 ```
 
-`plugin.js` 由 `node build.mjs` 生成。**只有 lead 跑构建**；
+`plugin.js` 由 `node plugins/pdf4oh/build.mjs` 生成。**只有 lead 跑构建**；
 作者改 `src/`，构建与 `plugin.js` 的同步由 `test/build.test.mjs` 守。
 
 ## 2. 构建约定（build.mjs 规则）
@@ -303,12 +303,12 @@ PDF 判定：`fileType` 小写为 `pdf`，或 `title` 以 `.pdf` 结尾。
   样式用 `registerCss`，选择器一律 `[data-plg="pdf4oh"]` 前缀。
 - 设置项（manifest.settings）：`maxChars`（默认 9000）、`maxFileMB`（默认 40）、
   `cacheMB`（默认 24）、`probePages`（默认 6）。
-- 权限最小集：`learn:read`、`net:external`、`ui`、`storage`、`css`（功能页样式需要）。不要申请写权限。
+- 权限最小集：`learn:read / font:read`、`net:external`、`ui`、`storage`、`css`（功能页样式需要）。不要申请写权限。
 
 ## 9. 测试与验收
 
-- 单测：`node --test test/`（Node ≥ 22；本机 Node 26）。
-- 构建守门：`node build.mjs --check`。
+- 单测：`node --test plugins/pdf4oh/test/`（Node ≥ 22；本机 Node 26）。
+- 构建守门：`node plugins/pdf4oh/build.mjs --check`。
 - 语料（真实课程 PDF，**只读**，机器上已有）：
   - `/home/lin/cs62doc/程序设计基础/教材&课件/C++的输出格式控制.pdf`（小、简单）
   - `/home/lin/cs62doc/线性代数/教材&课件/线性代数_刘余_课程讲义.pdf`（对象流+课程讲义）

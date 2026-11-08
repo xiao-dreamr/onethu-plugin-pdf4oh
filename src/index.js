@@ -19,15 +19,14 @@ import { createPdfTabRenderer, TAB_CSS } from "./tab.js";
 const manifest = {
   id: "onethu.pdf4oh",
   name: "pdf4oh · 课程 PDF 阅读",
-  version: "0.1.0",
+  version: "0.1.1",
   kind: "js",
   entry: "plugin.js",
   author: "xiao-dreamr",
   repo: "https://github.com/xiao-dreamr/onethu-plugin-pdf4oh",
   announce: true,
-  description:
-    "让 OH 读取网络学堂课程文件里的 PDF 正文：按课程/文件名定位课件，抽取带页码的文本，支持页码范围与页内检索。只读，不写任何课程数据；加密 PDF 与扫描件只做识别与提示。",
-  permissions: ["learn:read", "net:external", "ui", "storage", "css"],
+  description: "让 OH 读取网络学堂课程文件里的 PDF 正文：按课程/文件名定位课件，抽取带页码的文本，支持页码范围与页内检索。只读，不写任何课程数据；加密 PDF 与扫描件只做识别与提示。 部分 LaTeX 中文 PDF 无 /ToUnicode，会尝试用系统同款字体做字形轮廓匹配还原中文（只读系统字体白名单，需 font:read）。",
+  permissions: ["learn:read", "net:external", "font:read", "ui", "storage", "css"],
   settings: [
     {
       key: "maxChars",

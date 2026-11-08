@@ -126,6 +126,38 @@ function TEXT_joinLine(line) {
   return out;
 }
 
+/**
+ * 去重：有些课件用"同一段文字画 2–3 遍、每遍偏移 0.1–0.3pt"来伪造粗体/描边
+ * （pdfTeX 的 fake bold），而且各遍的**分段方式可能不同**（一遍逐字、另一遍
+ * 把相邻字合并成串），所以不能只按"文本相同"判断。
+ *
+ * 判据改成"起点几乎重合"：同一行（y 差 ≤1.5pt）里已有片段从几乎相同的 x 开始
+ * （差 ≤1.2pt），这一份就是重画，整段丢弃，保留第一份。真正相邻的字起点至少
+ * 差 0.3em（9pt 字号约 2.7pt），不会被误删。
+ */
+function TEXT_dedupeItems(items) {
+  if (items.length < 2) return items;
+  const kept = [];
+  const rows = new Map();
+  const sorted = items.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const item of sorted) {
+    if (!item || typeof item.text !== "string" || item.text.length === 0) continue;
+    const rowKey = Math.round(item.y);
+    let dup = false;
+    for (let dy = -2; dy <= 2 && !dup; dy++) {
+      const bucket = rows.get(rowKey + dy);
+      if (!bucket) continue;
+      dup = bucket.some((prev) => Math.abs(prev.x - item.x) <= 1.2 && Math.abs(prev.y - item.y) <= 1.5);
+    }
+    if (dup) continue;
+    const bucket = rows.get(rowKey);
+    if (bucket) bucket.push(item);
+    else rows.set(rowKey, [item]);
+    kept.push(item);
+  }
+  return kept.length > 0 ? kept : items;
+}
+
 /** 把 item 列表聚成行并按阅读顺序拼成整页文本。 */
 function TEXT_assembleItems(items) {
   const usable = items.filter((item) => item && typeof item.text === "string" && item.text.length > 0);
@@ -176,7 +208,7 @@ function TEXT_pageData(doc, pageIndex) {
   const page = doc.getPage(pageIndex);
   const bytes = TEXT_pageContentBytes(doc, page);
   const run = runContentStream(doc, page, bytes, { resources: page.resources });
-  return { page, bytes, run, text: TEXT_assembleItems(run.items) };
+  return { page, bytes, run, text: TEXT_assembleItems(TEXT_dedupeItems(run.items)) };
 }
 
 /**

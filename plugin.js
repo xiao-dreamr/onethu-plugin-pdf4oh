@@ -5,7 +5,7 @@
  * 源码：plugins/pdf4oh/src/ · 契约：plugins/pdf4oh/CONTRACT.md
  * 安装：设置 → 插件 → 安装插件 → 粘贴本文件内容（或从仓库以 plugin.js 安装）。
  */
-/* 模块顺序：../pdf/util.js → ../pdf/inflate.js → ../pdf/filters.js → ../pdf/security.js → ../pdf/lexer.js → ../pdf/xref.js → ../pdf/document.js → ../pdf/glyphs.js → ../pdf/cmap.js → ../pdf/fonts.js → ../pdf/content.js → ../pdf/text.js → ../cache.js → ../learn.js → ../args.js → ../format.js → ../commands.js → ../tab.js → ../index.js */
+/* 模块顺序：../pdf/util.js → ../pdf/inflate.js → ../pdf/filters.js → ../pdf/security.js → ../pdf/lexer.js → ../pdf/xref.js → ../pdf/document.js → ../pdf/glyphs.js → ../pdf/sfnt.js → ../pdf/fontmatch.js → ../pdf/cmap.js → ../pdf/fonts.js → ../pdf/content.js → ../pdf/text.js → ../cache.js → ../learn.js → ../args.js → ../format.js → ../commands.js → ../tab.js → ../index.js */
 
 /* ═══════════ src/pdf/util.js ═══════════ */
 /**
@@ -2900,6 +2900,48 @@ const GLYPH_AGL_SYMBOL = {
   product: "\u220F",
   integral: "\u222B",
   radical: "\u221A",
+  /* Computer Modern (CMEX) 的大号定界符/可变部件：LaTeX 公式里的 \left( 等，
+     字形名带 big/Big/bigg/Bigg 后缀，AGL 没有，按语义映射到对应 ASCII 定界符。 */
+  parenleftbig: "(",
+  parenleftBig: "(",
+  parenleftbigg: "(",
+  parenleftBigg: "(",
+  parenrightbig: ")",
+  parenrightBig: ")",
+  parenrightbigg: ")",
+  parenrightBigg: ")",
+  bracketleftbig: "[",
+  bracketleftBig: "[",
+  bracketleftbigg: "[",
+  bracketleftBigg: "[",
+  bracketrightbig: "]",
+  bracketrightBig: "]",
+  bracketrightbigg: "]",
+  bracketrightBigg: "]",
+  braceleftbig: "{",
+  braceleftBig: "{",
+  braceleftbigg: "{",
+  braceleftBigg: "{",
+  bracerightbig: "}",
+  bracerightBig: "}",
+  bracerightbigg: "}",
+  bracerightBigg: "}",
+  negationslash: "\u2260",
+  radicalbig: "\u221A",
+  radicalBig: "\u221A",
+  radicalbigg: "\u221A",
+  radicalBigg: "\u221A",
+  summationdisplay: "\u2211",
+  summationtext: "\u2211",
+  integraldisplay: "\u222B",
+  integraltext: "\u222B",
+  productdisplay: "\u220F",
+  uniondisplay: "\u22C3",
+  intersectiondisplay: "\u22C2",
+  coproductdisplay: "\u2210",
+  /* 可变部件的延伸段本身不产生字符（只是把大符号拉高），映射为空串避免噪声 */
+  vextendsingle: "",
+  vextenddouble: "",
   partialdiff: "\u2202",
   Delta: "\u2206",
   increment: "\u2206",
@@ -3278,6 +3320,488 @@ function glyphIsCjk(ch) {
 /** 是否"视觉上算空格"的字符（含 NBSP、全角空格、零宽空格）。 */
 function glyphIsSpace(ch) {
   return ch === " " || ch === "\u00A0" || ch === "\u3000" || ch === "\u200b" || ch === "\t" || ch === "\n" || ch === "\r";
+}
+
+/* ═══════════ src/pdf/sfnt.js ═══════════ */
+/**
+ * pdf4oh · SFNT（TrueType/OpenType/TTC）最小解析：只为"字形轮廓指纹"服务。
+ *
+ * 用途：部分 LaTeX 中文 PDF 的字体子集没有 /ToUnicode，cmap 还是符号编码
+ * （0xF000+code → GID），正文只剩字形轮廓，任何阅读器都抽不出 Unicode。
+ * 若系统装有同款字体（如 Windows 楷体 simkai.ttf），把嵌入字形和系统字体的
+ * 字形轮廓做指纹比对，就能精确还原字符。
+ *
+ * 为什么自己写：插件是单文件、零依赖，不能引 fontkit/opentype.js；这里只需要
+ *   - 表目录 + TTC 头；
+ *   - cmap（格式 0/4/6/12）取 Unicode→GID 或符号 code→GID；
+ *   - loca/glyf 里简单字形的轮廓点；
+ *   - 一个稳定指纹（FNV-1a 64）。
+ * 不处理 hinting/复合字形/可变字体：复合字形直接跳过（返回 null），宁可漏字
+ * 也不猜错字；CJK 字形几乎都是简单字形。
+ *
+ * 所有读取都做边界检查：坏字体返回 null，不抛异常（插件侧按"无法还原"降级）。
+ */
+
+/** 读大端 u16/u32（带边界检查）。 */
+function u16(bytes, dv, off) {
+  return off >= 0 && off + 2 <= bytes.length ? dv.getUint16(off) : 0;
+}
+function u32(bytes, dv, off) {
+  return off >= 0 && off + 4 <= bytes.length ? dv.getUint32(off) : 0;
+}
+function i16(bytes, dv, off) {
+  return off >= 0 && off + 2 <= bytes.length ? dv.getInt16(off) : 0;
+}
+
+function tableAt(bytes, dv, base) {
+  const numTables = u16(bytes, dv, base + 4);
+  if (!numTables || numTables > 512) return null;
+  const tables = new Map();
+  for (let i = 0; i < numTables; i++) {
+    const o = base + 12 + i * 16;
+    if (o + 16 > bytes.length) return null;
+    const tag = String.fromCharCode(bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]);
+    const offset = u32(bytes, dv, o + 8);
+    const length = u32(bytes, dv, o + 12);
+    if (offset + length > bytes.length) return null;
+    tables.set(tag, { offset, length });
+  }
+  return tables;
+}
+
+/**
+ * 解析字体文件（支持 TTC 的第 faceIndex 个 face）。
+ * @returns {{bytes:Uint8Array, dv:DataView, tables:Map<string,{offset:number,length:number}>, numGlyphs:number}|null}
+ */
+function parseSfnt(bytes, faceIndex = 0) {
+  if (!bytes || bytes.length < 12) return null;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let base = 0;
+  if (u32(bytes, dv, 0) === 0x74746366) {
+    // 'ttcf'：TTC 头里是各 face 的 SFNT 偏移
+    const count = u32(bytes, dv, 8);
+    if (!count || count > 64 || faceIndex < 0 || faceIndex >= count) return null;
+    base = u32(bytes, dv, 12 + faceIndex * 4);
+  } else if (u32(bytes, dv, 0) !== 0x00010000 && u32(bytes, dv, 0) !== 0x4f54544f && u32(bytes, dv, 0) !== 0x74727565) {
+    return null; // 不是 TrueType/OpenType/CFF 容器
+  }
+  const tables = tableAt(bytes, dv, base);
+  if (!tables) return null;
+  const maxp = tables.get("maxp");
+  const numGlyphs = maxp ? u16(bytes, dv, maxp.offset + 4) : 0;
+  if (!numGlyphs) return null;
+  return { bytes, dv, tables, numGlyphs };
+}
+
+/** 读 cmap 的某个子表；返回 Map<code, gid>（失败返回空 Map）。 */
+function cmapSubtable(font, subtableOffset, format) {
+  const { bytes, dv } = font;
+  const out = new Map();
+  const b = subtableOffset;
+  if (format === 0) {
+    for (let c = 0; c < 256; c++) {
+      const gid = bytes[b + 6 + c];
+      if (gid) out.set(c, gid);
+    }
+    return out;
+  }
+  if (format === 4) {
+    const segX2 = u16(bytes, dv, b + 6);
+    const seg = Math.floor(segX2 / 2);
+    if (!seg || seg > 1024) return out;
+    const endO = b + 14;
+    const startO = endO + segX2 + 2;
+    const deltaO = startO + segX2;
+    const rangeO = deltaO + segX2;
+    for (let s = 0; s < seg; s++) {
+      const end = u16(bytes, dv, endO + s * 2);
+      const start = u16(bytes, dv, startO + s * 2);
+      if (start === 0xffff || start > end) continue;
+      const delta = i16(bytes, dv, deltaO + s * 2);
+      const ro = u16(bytes, dv, rangeO + s * 2);
+      for (let c = start; c <= end; c++) {
+        let gid;
+        if (ro === 0) {
+          gid = (c + delta) & 0xffff;
+        } else {
+          const gi = rangeO + s * 2 + ro + (c - start) * 2;
+          gid = u16(bytes, dv, gi);
+          if (gid) gid = (gid + delta) & 0xffff;
+        }
+        if (gid) out.set(c, gid);
+      }
+    }
+    return out;
+  }
+  if (format === 6) {
+    const first = u16(bytes, dv, b + 6);
+    const count = u16(bytes, dv, b + 8);
+    for (let k = 0; k < count && k < 4096; k++) {
+      const gid = u16(bytes, dv, b + 10 + k * 2);
+      if (gid) out.set(first + k, gid);
+    }
+    return out;
+  }
+  if (format === 12) {
+    const groups = u32(bytes, dv, b + 12);
+    for (let g = 0; g < groups && g < 4096; g++) {
+      const o = b + 16 + g * 12;
+      const start = u32(bytes, dv, o);
+      const end = u32(bytes, dv, o + 4);
+      const gid0 = u32(bytes, dv, o + 8);
+      const n = Math.min(end - start, 65535);
+      for (let k = 0; k <= n; k++) out.set(start + k, gid0 + k);
+    }
+    return out;
+  }
+  return out;
+}
+
+/** cmap 子表列表（带 platform/encoding/format）。 */
+function sfntCmapSubtables(font) {
+  const { bytes, dv, tables } = font;
+  const cmap = tables.get("cmap");
+  if (!cmap) return [];
+  const b = cmap.offset;
+  const count = u16(bytes, dv, b + 2);
+  if (!count || count > 64) return [];
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const rec = b + 4 + i * 8;
+    const platform = u16(bytes, dv, rec);
+    const encoding = u16(bytes, dv, rec + 2);
+    const off = u32(bytes, dv, rec + 4);
+    const sub = b + off;
+    const format = u16(bytes, dv, sub);
+    out.push({ platform, encoding, format, offset: sub, map: cmapSubtable(font, sub, format) });
+  }
+  return out;
+}
+
+/** 取 Unicode 映射（优先 3/10，其次 3/1，再 0/x）。 */
+function sfntUnicodeMap(font) {
+  const subs = sfntCmapSubtables(font);
+  const pick =
+    subs.find((s) => s.platform === 3 && s.encoding === 10) ||
+    subs.find((s) => s.platform === 3 && s.encoding === 1) ||
+    subs.find((s) => s.platform === 0);
+  return pick ? pick.map : new Map();
+}
+
+/** 取符号映射（3/0 或 1/0）：key 可能是 0xF000+code，也可能是原 code。 */
+function sfntSymbolicMap(font) {
+  const subs = sfntCmapSubtables(font);
+  const pick =
+    subs.find((s) => s.platform === 3 && s.encoding === 0 && s.format !== 0) ||
+    subs.find((s) => s.platform === 3 && s.encoding === 0) ||
+    subs.find((s) => s.platform === 1 && s.encoding === 0 && s.format === 0);
+  return pick ? pick.map : new Map();
+}
+
+/**
+ * 简单字形轮廓指纹（FNV-1a 64）。复合字形/空字形返回 null。
+ * 指纹覆盖：轮廓数、每个轮廓的端点、每个点的 on/off 标志与坐标。
+ * 嵌入子集与系统同款字体只要坐标未被改写，指纹就一致。
+ */
+function sfntGlyphHash(font, gid) {
+  const { bytes, dv, tables, numGlyphs } = font;
+  if (!Number.isInteger(gid) || gid < 1 || gid >= numGlyphs) return null;
+  const head = tables.get("head");
+  const loca = tables.get("loca");
+  const glyf = tables.get("glyf");
+  if (!head || !loca || !glyf) return null;
+  const longLoca = i16(bytes, dv, head.offset + 50) === 1;
+  const start = longLoca ? u32(bytes, dv, loca.offset + gid * 4) : u16(bytes, dv, loca.offset + gid * 2) * 2;
+  const end = longLoca ? u32(bytes, dv, loca.offset + gid * 4 + 4) : u16(bytes, dv, loca.offset + gid * 2 + 2) * 2;
+  if (end <= start) return null;
+  const g = glyf.offset + start;
+  if (g + 10 > bytes.length) return null;
+  const contours = i16(bytes, dv, g);
+  if (contours <= 0 || contours > 512) return null; // <=0：复合/空字形，跳过
+  let p = g + 10;
+  const endPts = [];
+  for (let i = 0; i < contours; i++) {
+    const e = u16(bytes, dv, p);
+    p += 2;
+    if (e < (endPts[i - 1] ?? -1)) return null;
+    endPts.push(e);
+  }
+  const numPts = endPts.length ? endPts[endPts.length - 1] + 1 : 0;
+  if (!numPts || numPts > 20000) return null;
+  const instrLen = u16(bytes, dv, p);
+  p += 2 + instrLen;
+  const flags = [];
+  while (flags.length < numPts) {
+    if (p >= bytes.length) return null;
+    const f = bytes[p++];
+    flags.push(f);
+    if (f & 8) {
+      if (p >= bytes.length) return null;
+      let repeat = bytes[p++];
+      while (repeat-- > 0 && flags.length < numPts) flags.push(f);
+    }
+  }
+  const xs = [];
+  const ys = [];
+  let x = 0;
+  for (const f of flags) {
+    if (f & 2) {
+      if (p >= bytes.length) return null;
+      const d = bytes[p++];
+      x += f & 16 ? d : -d;
+    } else if (!(f & 16)) {
+      if (p + 2 > bytes.length) return null;
+      x += dv.getInt16(p);
+      p += 2;
+    }
+    xs.push(x);
+  }
+  let y = 0;
+  for (const f of flags) {
+    if (f & 4) {
+      if (p >= bytes.length) return null;
+      const d = bytes[p++];
+      y += f & 32 ? d : -d;
+    } else if (!(f & 32)) {
+      if (p + 2 > bytes.length) return null;
+      y += dv.getInt16(p);
+      p += 2;
+    }
+    ys.push(y);
+  }
+  let h = 0xcbf29ce484222325n;
+  const mul = 0x100000001b3n;
+  const mix = (n) => {
+    h ^= BigInt(n & 0xffffffff);
+    h = BigInt.asUintN(64, h * mul);
+    h ^= BigInt(n >>> 0);
+    h = BigInt.asUintN(64, h * mul);
+  };
+  mix(contours);
+  for (const e of endPts) mix(e);
+  for (const f of flags) mix(f);
+  for (const v of xs) mix(v);
+  for (const v of ys) mix(v);
+  return h;
+}
+
+/**
+ * 系统字体：Unicode→GID 反成 指纹→Unicode。
+ * @returns {Map<bigint, number>} 只含简单字形
+ */
+function buildGlyphHashIndex(font, maxGlyphs = 40000) {
+  const index = new Map();
+  const unicode = sfntUnicodeMap(font);
+  if (!unicode.size) return index;
+  let seen = 0;
+  for (const [cp, gid] of unicode) {
+    if (seen++ > maxGlyphs) break;
+    const h = sfntGlyphHash(font, gid);
+    if (h === null || index.has(h)) continue;
+    index.set(h, cp);
+  }
+  return index;
+}
+
+/* ═══════════ src/pdf/fontmatch.js ═══════════ */
+/**
+ * pdf4oh · 字体轮廓匹配：给"看得到、抽不出"的中文 PDF 找回 Unicode。
+ *
+ * 适用场景（真实课件）：pdfTeX 只嵌入了 KaiTi 子集，没有 /ToUnicode，字体 cmap
+ * 是符号编码（0xF000+code → GID），正文只剩字形轮廓——pdftotext 也只能输出乱码。
+ * 如果系统装有同款字体，就用"轮廓指纹"把每个嵌入字形对应到 Unicode。
+ *
+ * 工作流：
+ *   1. 扫描文档所有页面的字体，找出「简单 TrueType + 无 ToUnicode + 有 FontFile2 +
+ *      字体名能识别（KaiTi/SimSun/SimHei/FangSong/YaHei）」的字体；
+ *   2. 通过宿主 `onethu.fonts.system(family)` 读系统字体（白名单路径，只读），
+ *      解析出「轮廓指纹 → Unicode」表（模块级缓存，跨文档复用）；
+ *   3. 抽取时 fonts.js 对每个命中字体：读嵌入字体 cmap 的符号 code→GID，
+ *      算指纹查表，得到 code→Unicode。
+ *
+ * 边界：
+ *   - 系统没有同款字体（或宿主太老没有 fonts API）→ 不启用，字体层继续 U+FFFD；
+ *   - 只匹配简单字形；复合字形跳过（宁可漏字不猜错）；
+ *   - 指纹是精确轮廓比对，不做模糊/OCR；不同字体版本可能匹配不上；
+ *   - 读系统字体只经宿主白名单，插件不碰文件系统。
+ */
+
+
+/** 字体名 → 系统字体族（供宿主白名单使用）。 */
+function fontFamilyKey(baseFont) {
+  const name = String(baseFont ?? "").toLowerCase().replace(/^[a-z]{6}\+/, "").replace(/\s+/g, "");
+  if (!name) return null;
+  if (/kaiti|楷体|楷/.test(name)) return "kaiti";
+  if (/simsun|songti|宋体|宋/.test(name)) return "simsun";
+  if (/simhei|heiti|黑体|黑/.test(name)) return "simhei";
+  if (/fangsong|仿宋/.test(name)) return "fangsong";
+  if (/yahei|雅黑|msyh/.test(name)) return "yahei";
+  return null;
+}
+
+/** 模块级系统字体索引缓存：family → Promise<{map, path} | null>。 */
+const SYSTEM_INDEX_CACHE = new Map();
+
+function decodeB64(b64) {
+  try {
+    const bin = typeof atob === "function" ? atob(String(b64 ?? "")) : "";
+    if (!bin) return null;
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function loadSystemIndex(ctx, family) {
+  if (SYSTEM_INDEX_CACHE.has(family)) return SYSTEM_INDEX_CACHE.get(family);
+  const promise = (async () => {
+    try {
+      const api = ctx && ctx.onethu && ctx.onethu.fonts;
+      if (!api || typeof api.system !== "function") return null;
+      const result = await api.system(family);
+      if (!result || !result.b64) return null;
+      const bytes = decodeB64(result.b64);
+      if (!bytes) return null;
+      const sfnt = parseSfnt(bytes, 0);
+      if (!sfnt) return null;
+      const map = buildGlyphHashIndex(sfnt);
+      if (!map.size) return null;
+      return { map, path: String(result.path ?? ""), family };
+    } catch {
+      return null;
+    }
+  })();
+  SYSTEM_INDEX_CACHE.set(family, promise);
+  return promise;
+}
+
+/** 清空系统字体缓存（测试/插件重载用）。 */
+function clearSystemFontIndexCache() {
+  SYSTEM_INDEX_CACHE.clear();
+}
+
+/** 扫描文档字体，返回需要字形匹配的字体描述（按 ref 去重）。 */
+function collectCandidates(doc) {
+  const out = [];
+  const seen = new Set();
+  const pages = doc && Number.isInteger(doc.pageCount) ? doc.pageCount : 0;
+  for (let i = 0; i < pages; i++) {
+    let page;
+    try {
+      page = doc.getPage(i);
+    } catch {
+      continue;
+    }
+    const resources = page && page.resources;
+    /* page.resources 在 document.js 里是 Map（键是资源名），不是 dict */
+    const fontValue = resources instanceof Map ? resources.get("Font") : resources && isDict(resources) ? dictGet(resources, "Font") : null;
+    const fonts = fontValue ? resolveOr(doc, fontValue, null) : null;
+    if (!isDict(fonts) || !(fonts.m instanceof Map)) continue;
+    for (const [resourceName, ref] of fonts.m) {
+      if (!ref || typeof ref !== "object") continue;
+      const key = `${ref.n}:${ref.g}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let fontDict;
+      try {
+        fontDict = doc.resolve(ref);
+      } catch {
+        continue;
+      }
+      if (!isDict(fontDict)) continue;
+      const subtype = nameOf(dictGet(fontDict, "Subtype"));
+      const baseFont = nameOf(dictGet(fontDict, "BaseFont")) || "";
+      const family = fontFamilyKey(baseFont);
+      if (!family) continue;
+      if (subtype !== "TrueType") continue;
+      if (dictGet(fontDict, "ToUnicode")) continue;
+      const descriptor = resolveOr(doc, dictGet(fontDict, "FontDescriptor"), null);
+      if (!isDict(descriptor) || !dictGet(descriptor, "FontFile2")) continue;
+      out.push({ resourceName, ref, key, fontDict, baseFont, family });
+    }
+  }
+  return out;
+}
+
+/**
+ * 为文档准备字形匹配（异步；读系统字体）。
+ * @returns {{needed:boolean, families:string[], ready:string[], failed:string[], recoveredFonts:number}}
+ */
+async function prepareFontMatching(doc, ctx) {
+  const summary = { needed: false, families: [], ready: [], failed: [], recoveredFonts: 0 };
+  if (!doc || !ctx) return summary;
+  const candidates = collectCandidates(doc);
+  if (!candidates.length) return summary;
+  summary.needed = true;
+  summary.families = [...new Set(candidates.map((c) => c.family))];
+  const maps = new Map();
+  await Promise.all(
+    summary.families.map(async (family) => {
+      const index = await loadSystemIndex(ctx, family);
+      if (index) {
+        maps.set(family, index);
+        summary.ready.push(family);
+      } else {
+        summary.failed.push(family);
+      }
+    }),
+  );
+  if (maps.size > 0) {
+    doc._glyphMaps = maps;
+    summary.recoveredFonts = candidates.filter((c) => maps.has(c.family)).length;
+  }
+  return summary;
+}
+
+/** 读取字体文件流（FontFile2）并解析；失败返回 null。 */
+function embeddedSfnt(doc, fontDict) {
+  try {
+    const descriptor = resolveOr(doc, dictGet(fontDict, "FontDescriptor"), null);
+    const file = descriptor && isDict(descriptor) ? resolveOr(doc, dictGet(descriptor, "FontFile2"), null) : null;
+    if (!file) return null;
+    const bytes = doc.tryDecodeStream ? doc.tryDecodeStream(file) : null;
+    if (!bytes || !bytes.length) return null;
+    return parseSfnt(bytes, 0);
+  } catch {
+    return null;
+  }
+}
+
+const EMBEDDED_TABLE_CACHE = new WeakMap();
+
+/**
+ * 用系统字体指纹把嵌入字体的 code→Unicode 表建出来。
+ * @returns {{table:Array<string|null>, matched:number, total:number}|null}
+ */
+function embeddedGlyphTable(doc, fontDict, family) {
+  const maps = doc && doc._glyphMaps;
+  if (!maps || !family || !maps.has(family)) return null;
+  const cached = EMBEDDED_TABLE_CACHE.get(fontDict);
+  if (cached) return cached;
+  const sfnt = embeddedSfnt(doc, fontDict);
+  if (!sfnt) return null;
+  const symbolic = sfntSymbolicMap(sfnt);
+  if (!symbolic.size) return null;
+  const system = maps.get(family);
+  const table = new Array(256).fill(null);
+  let matched = 0;
+  for (const [key, gid] of symbolic) {
+    let code = key;
+    if (key >= 0xf000 && key <= 0xf0ff) code = key - 0xf000;
+    else if (key > 0xff) continue;
+    if (code < 0 || code > 0xff) continue;
+    const hash = sfntGlyphHash(sfnt, gid);
+    if (hash === null) continue;
+    const cp = system.map.get(hash);
+    if (cp === undefined) continue;
+    table[code] = String.fromCodePoint(cp);
+    matched += 1;
+  }
+  const result = { table, matched, total: symbolic.size };
+  EMBEDDED_TABLE_CACHE.set(fontDict, result);
+  return result;
 }
 
 /* ═══════════ src/pdf/cmap.js ═══════════ */
@@ -3856,6 +4380,53 @@ function FONT_parse(doc, fontDict) {
   return FONT_buildSimple(doc, fontDict, subtype, baseFont, warnings, cmap, descriptor, missingWidth);
 }
 
+/** 同一文档同类问题只提示一次，避免 31 个楷体子集刷 31 条相同 warning。 */
+function FONT_noteOnce(doc, key, warnings, text) {
+  try {
+    if (!(doc._glyphNotes instanceof Set)) doc._glyphNotes = new Set();
+    if (doc._glyphNotes.has(key)) return;
+    doc._glyphNotes.add(key);
+  } catch {
+    /* doc 不可写也不影响文字本身 */
+  }
+  warnings.push(text);
+}
+
+/** 从内嵌 Type1 字体程序里读 builtin encoding（dup code /glyphname put）。 */
+function FONT_type1BuiltinTable(doc, descriptor) {
+  if (!isDict(descriptor)) return null;
+  const file = resolveOr(doc, dictGet(descriptor, "FontFile"), null);
+  if (!isStream(file)) return null;
+  let text;
+  try {
+    const bytes = doc.tryDecodeStream ? doc.tryDecodeStream(file) : null;
+    if (!bytes || !bytes.length) return null;
+    text = latin1(bytes);
+  } catch {
+    return null;
+  }
+  const at = text.indexOf("/Encoding");
+  if (at < 0) return null;
+  /* 只看 /Encoding 附近：Type1 的 Private 区也可能有 dup，但不会在编码表之后这么密集。 */
+  const region = text.slice(at, Math.min(text.length, at + 24000));
+  const re = /dup\s+(\d+)\s+\/([^\s/{}()<>[\]]+)\s+put/g;
+  const table = new Array(256).fill(null);
+  let mapped = 0;
+  let total = 0;
+  let m;
+  while ((m = re.exec(region))) {
+    const code = Number(m[1]);
+    if (!Number.isFinite(code) || code < 0 || code > 255) continue;
+    total += 1;
+    const uni = glyphNameToUnicode(m[2]);
+    if (uni !== null) {
+      table[code] = uni;
+      mapped += 1;
+    }
+  }
+  return total > 0 ? { table, mapped, total } : null;
+}
+
 /** 简单字体：ToUnicode → /Encoding(+Differences) → WinAnsi → U+FFFD。 */
 function FONT_buildSimple(doc, fontDict, subtype, baseFont, warnings, cmap, descriptor, missingWidth) {
   const encodingValue = resolveOr(doc, dictGet(fontDict, "Encoding"), null);
@@ -3901,13 +4472,44 @@ function FONT_buildSimple(doc, fontDict, subtype, baseFont, warnings, cmap, desc
       }
     }
   }
-  // 最终兜底 WinAnsi：/Encoding 缺失或是厂商内嵌编码（Builtin）时至少 ASCII 是对的
-  if (table.some((ch, code) => ch === null && code >= 0x20 && code <= 0x7e && !blocked.has(code))) {
+  /* ── 无 ToUnicode 的补救（2026-11，真实课件场景）──────────────────────────
+     Type1：字体程序里通常带一份内嵌编码（/Encoding ... dup N /name put），
+            按字形名还原，Computer Modern 的正文/数学符号都能读出来；
+     TrueType 符号字体：pdfTeX 的楷体子集用 0xF000+code 的符号 cmap，
+            没有 Unicode 信息，只能拿系统同款字体做"轮廓指纹"匹配（见 fontmatch.js）。
+     两者都失败才退回 WinAnsi 的 ASCII 近似。 */
+  let recoveredBy = "";
+  if (!cmap && table.some((ch) => ch === null)) {
+    if (subtype === "Type1") {
+      const type1 = FONT_type1BuiltinTable(doc, descriptor);
+      if (type1 && type1.mapped > 0) {
+        for (let code = 0; code < 256; code++) {
+          if (table[code] === null && type1.table[code] !== null) table[code] = type1.table[code];
+        }
+        recoveredBy = "type1";
+        FONT_noteOnce(doc, `type1:${baseFont}`, warnings, `字体 ${baseFont} 的 /Encoding 未声明，已从内嵌 Type1 编码还原 ${type1.mapped} 个字形`);
+      }
+    } else if (subtype === "TrueType") {
+      const family = fontFamilyKey(baseFont);
+      const match = embeddedGlyphTable(doc, fontDict, family);
+      if (match && match.matched > 0) {
+        for (let code = 0; code < 256; code++) {
+          if (table[code] === null && match.table[code] !== null) table[code] = match.table[code];
+        }
+        recoveredBy = "glyph";
+        FONT_noteOnce(doc, `glyph-ok:${family}`, warnings, `字体族 ${family} 无 /ToUnicode，已用系统字体轮廓匹配还原（如 ${baseFont} ${match.matched}/${match.total} 个字形）`);
+      } else if (family) {
+        FONT_noteOnce(doc, `glyph-miss:${family}`, warnings, `字体族 ${family} 无 /ToUnicode，且未找到可匹配的系统字体；中文无法还原`);
+      }
+    }
+  }
+  // 最终兜底 WinAnsi：只在没有别的还原途径时，至少 ASCII 是对的
+  if (!recoveredBy && table.some((ch, code) => ch === null && code >= 0x20 && code <= 0x7e && !blocked.has(code))) {
     for (let code = 0x20; code <= 0x7e; code++) {
       if (table[code] === null && !blocked.has(code)) table[code] = String.fromCharCode(code);
     }
   }
-  if (encodingName === "Builtin" || (!baseTable && !isName(encodingValue) && !isDict(encodingValue))) {
+  if (!recoveredBy && (encodingName === "Builtin" || (!baseTable && !isName(encodingValue) && !isDict(encodingValue)))) {
     warnings.push(`字体 ${baseFont} 的 /Encoding 未声明或为内嵌编码，已按 WinAnsi 近似`);
   }
   if (unknownNames.length > 0) {
@@ -5072,6 +5674,38 @@ function TEXT_joinLine(line) {
   return out;
 }
 
+/**
+ * 去重：有些课件用"同一段文字画 2–3 遍、每遍偏移 0.1–0.3pt"来伪造粗体/描边
+ * （pdfTeX 的 fake bold），而且各遍的**分段方式可能不同**（一遍逐字、另一遍
+ * 把相邻字合并成串），所以不能只按"文本相同"判断。
+ *
+ * 判据改成"起点几乎重合"：同一行（y 差 ≤1.5pt）里已有片段从几乎相同的 x 开始
+ * （差 ≤1.2pt），这一份就是重画，整段丢弃，保留第一份。真正相邻的字起点至少
+ * 差 0.3em（9pt 字号约 2.7pt），不会被误删。
+ */
+function TEXT_dedupeItems(items) {
+  if (items.length < 2) return items;
+  const kept = [];
+  const rows = new Map();
+  const sorted = items.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const item of sorted) {
+    if (!item || typeof item.text !== "string" || item.text.length === 0) continue;
+    const rowKey = Math.round(item.y);
+    let dup = false;
+    for (let dy = -2; dy <= 2 && !dup; dy++) {
+      const bucket = rows.get(rowKey + dy);
+      if (!bucket) continue;
+      dup = bucket.some((prev) => Math.abs(prev.x - item.x) <= 1.2 && Math.abs(prev.y - item.y) <= 1.5);
+    }
+    if (dup) continue;
+    const bucket = rows.get(rowKey);
+    if (bucket) bucket.push(item);
+    else rows.set(rowKey, [item]);
+    kept.push(item);
+  }
+  return kept.length > 0 ? kept : items;
+}
+
 /** 把 item 列表聚成行并按阅读顺序拼成整页文本。 */
 function TEXT_assembleItems(items) {
   const usable = items.filter((item) => item && typeof item.text === "string" && item.text.length > 0);
@@ -5122,7 +5756,7 @@ function TEXT_pageData(doc, pageIndex) {
   const page = doc.getPage(pageIndex);
   const bytes = TEXT_pageContentBytes(doc, page);
   const run = runContentStream(doc, page, bytes, { resources: page.resources });
-  return { page, bytes, run, text: TEXT_assembleItems(run.items) };
+  return { page, bytes, run, text: TEXT_assembleItems(TEXT_dedupeItems(run.items)) };
 }
 
 /**
@@ -6099,6 +6733,13 @@ async function openDocument(deps, file) {
     maxBytes: deps.cfg.maxFileMB * 1024 * 1024,
   });
   const doc = loadPdf(bytes, { maxBytes: deps.cfg.maxFileMB * 1024 * 1024 });
+  /* 中文 PDF 可能没有 ToUnicode：先准备"系统字体轮廓匹配"（宿主允许时），
+     再进抽取；失败不抛错，字体层按 U+FFFD 降级并给 warning。 */
+  try {
+    await prepareFontMatching(doc, deps.ctx);
+  } catch {
+    /* 匹配是增强项，坏了不能挡住打开文档 */
+  }
   const entry = {
     key,
     name: file.title,
@@ -6455,6 +7096,11 @@ function createPdfTabRenderer(deps) {
             maxBytes: deps.cfg.maxFileMB * 1024 * 1024,
           });
           const doc = loadPdf(bytes, { maxBytes: deps.cfg.maxFileMB * 1024 * 1024 });
+          try {
+            await prepareFontMatching(doc, deps.ctx);
+          } catch {
+            /* 字体匹配是增强项，失败不挡页面 */
+          }
           entry = { key: cacheKey, name: file.title, size: bytes.length, bytesLen: bytes.length, doc, pages: new Map() };
           deps.cache.set(cacheKey, entry);
         }
@@ -6560,15 +7206,14 @@ function createPdfTabRenderer(deps) {
 const manifest = {
   id: "onethu.pdf4oh",
   name: "pdf4oh · 课程 PDF 阅读",
-  version: "0.1.0",
+  version: "0.1.1",
   kind: "js",
   entry: "plugin.js",
   author: "xiao-dreamr",
   repo: "https://github.com/xiao-dreamr/onethu-plugin-pdf4oh",
   announce: true,
-  description:
-    "让 OH 读取网络学堂课程文件里的 PDF 正文：按课程/文件名定位课件，抽取带页码的文本，支持页码范围与页内检索。只读，不写任何课程数据；加密 PDF 与扫描件只做识别与提示。",
-  permissions: ["learn:read", "net:external", "ui", "storage", "css"],
+  description: "让 OH 读取网络学堂课程文件里的 PDF 正文：按课程/文件名定位课件，抽取带页码的文本，支持页码范围与页内检索。只读，不写任何课程数据；加密 PDF 与扫描件只做识别与提示。 部分 LaTeX 中文 PDF 无 /ToUnicode，会尝试用系统同款字体做字形轮廓匹配还原中文（只读系统字体白名单，需 font:read）。",
+  permissions: ["learn:read", "net:external", "font:read", "ui", "storage", "css"],
   settings: [
     {
       key: "maxChars",

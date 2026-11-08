@@ -33,6 +33,8 @@ const MODULES = [
   "src/pdf/document.js",
   // ── PDF 文本层（pdf-text）
   "src/pdf/glyphs.js",
+  "src/pdf/sfnt.js",
+  "src/pdf/fontmatch.js",
   "src/pdf/cmap.js",
   "src/pdf/fonts.js",
   "src/pdf/content.js",

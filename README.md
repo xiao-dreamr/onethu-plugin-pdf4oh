@@ -44,7 +44,7 @@ xiao-dreamr/onethu-plugin-pdf4oh
 
 下载仓库根目录的 [`plugin.js`](./plugin.js) 全文，**设置 → 插件 → 安装插件 → 粘贴代码**。
 
-安装时确认权限：`learn:read`、`net:external`、`ui`、`storage`、`css`（均为只读/展示类）。
+安装时确认权限：`learn:read`、`net:external`、`font:read`、`ui`、`storage`、`css`（均为只读/展示类）。
 
 **方式三：本地开发**
 
@@ -106,11 +106,12 @@ query=特征值 线性代数
 |---|---|
 | `learn:read` | 读课程列表、课件列表、课件字节（只读） |
 | `net:external` | 旧宿主回退取字节（`downloadUrl`） |
+| `font:read` | 读取系统自带字体（白名单路径，只读）用于字形轮廓匹配；不读用户目录 |
 | `ui` | 注册命令/功能页 |
 | `storage` | 读插件设置（`onethu.settings.get`） |
 | `css` | 功能页作用域样式（`[data-plg="pdf4oh"]`） |
 
-- 不申请任何写权限；不读本地磁盘；不上传；不调用模型。
+- 不申请任何写权限；不读用户磁盘；仅经宿主白名单只读系统字体（可选）；不上传；不调用模型。
 - 解析结果只放进程内缓存（默认 24MB，可在设置里调小），插件停用/应用退出即清空。
 
 ## 边界（先说清楚，免得误会）
@@ -147,6 +148,8 @@ src/
     ├── glyphs.js   字形名 → Unicode、WinAnsi/MacRoman/Standard
     ├── cmap.js     ToUnicode CMap 解析
     ├── fonts.js    字体解码（简单字体 / Type0 + Identity-H）
+    ├── sfnt.js     TrueType/TTC 字形轮廓指纹（系统字体匹配用）
+    ├── fontmatch.js 无 ToUnicode 时的系统字体轮廓匹配（可选）
     ├── content.js  内容流解释（文本状态机、Form XObject）
     └── text.js     阅读顺序、行/空格、范围抽取、检索、扫描件探测
 ```
@@ -157,8 +160,8 @@ src/
 ## 测试
 
 ```bash
-node build.mjs --check
-node --test $(find test -name '*.test.mjs' | sort)
+node plugins/pdf4oh/build.mjs --check
+node --test "plugins/pdf4oh/test/**/*.test.mjs"
 ```
 
 测试覆盖：
@@ -174,6 +177,8 @@ node --test $(find test -name '*.test.mjs' | sort)
 
 - 加密 PDF 解密（RC4/AES）未实现，只识别；
 - Type0 字体在**没有 ToUnicode** 时只能输出占位符（CID→Unicode 需要 Adobe 中文 CMap 大表）；
+- 简单 TrueType 字体若不是符号子集（如部分 pdfTeX 楷体），会先尝试用系统同款字体做字形轮廓匹配；
+  匹配需要宿主提供 `fonts.system`（`font:read`）且系统装有同款字体，失败则仍输出占位符；
 - 非文本内容（公式图片、扫描页）不还原；
 - 通知/作业**附件**（非课程文件）暂不在 `learn.files` 清单内；后续可基于 `downloadUrl`
   扩展「任意 learn 附件」读取。

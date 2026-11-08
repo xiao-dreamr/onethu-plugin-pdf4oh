@@ -12,6 +12,7 @@
  */
 
 import { loadPdf } from "./pdf/document.js";
+import { prepareFontMatching } from "./pdf/fontmatch.js";
 import { extractRangeText, searchDocument } from "./pdf/text.js";
 import { formatError, formatHostError } from "./format.js";
 import { fetchLearnPdfBytes, isPdfLearnFile } from "./learn.js";
@@ -202,6 +203,11 @@ export function createPdfTabRenderer(deps) {
             maxBytes: deps.cfg.maxFileMB * 1024 * 1024,
           });
           const doc = loadPdf(bytes, { maxBytes: deps.cfg.maxFileMB * 1024 * 1024 });
+          try {
+            await prepareFontMatching(doc, deps.ctx);
+          } catch {
+            /* 字体匹配是增强项，失败不挡页面 */
+          }
           entry = { key: cacheKey, name: file.title, size: bytes.length, bytesLen: bytes.length, doc, pages: new Map() };
           deps.cache.set(cacheKey, entry);
         }

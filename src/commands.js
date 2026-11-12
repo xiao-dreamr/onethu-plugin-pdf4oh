@@ -40,6 +40,7 @@ export function buildCommandList(deps) {
     {
       id: "files",
       title: "列出网络学堂课程里的 PDF 文件（输入课程名关键词，空=全部课程）",
+      agentHint: "当用户要阅读/总结网络学堂课件 PDF，但还不知道文件 id 时先用。输入课程名关键词（可空）；结果里的 fileId 供 info/read/search 使用。",
       inputLabel: "课程名关键词（可空）",
       inputPlaceholder: "例如：线性代数（留空=全部课程）",
       run: (input) => runFilesCommand(deps, input),
@@ -47,6 +48,7 @@ export function buildCommandList(deps) {
     {
       id: "info",
       title: "查看课程 PDF 概况：页数/可读文本页/是否扫描件（输入文件名或 fileId）",
+      agentHint: "读取 PDF 前用于判断页数、是否有可抽取文本、是否扫描件；扫描件或无文本时直接如实告诉用户，不要编造正文。",
       inputLabel: "文件名或 fileId",
       inputPlaceholder: "例如：第3讲 或 fileId=123456",
       run: (input) => runInfoCommand(deps, input),
@@ -54,6 +56,7 @@ export function buildCommandList(deps) {
     {
       id: "read",
       title: "读取课程 PDF 正文（输入：文件名或 fileId，可带页码范围，如「第3讲 1-6」）",
+      agentHint: "用户要总结/讲解/引用课件 PDF 正文时使用。先用 files/info 定位 fileId；默认读少量页，长文档按返回的续读提示分段继续，不能凭文件名猜内容。",
       inputLabel: "文件名 [页码]，如：第3讲 1-6",
       inputPlaceholder: "例如：线性代数 1-6 / fileId=123 pages=2-5",
       run: (input) => runReadCommand(deps, input),
@@ -61,6 +64,7 @@ export function buildCommandList(deps) {
     {
       id: "search",
       title: "在课程 PDF 内检索关键词并返回命中页上下文（输入：文件名 关键词）",
+      agentHint: "用户要在课件 PDF 中找某个概念/公式的出处时使用；输入「文件名 关键词」，命中页可再用 read 精读。",
       inputLabel: "文件名 关键词",
       inputPlaceholder: "例如：第3讲 矩阵",
       run: (input) => runSearchCommand(deps, input),
